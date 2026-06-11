@@ -1,22 +1,21 @@
 nextflow.enable.types = true
+nextflow.enable.moduleBinaries = true
+
+include { Pair } from './types.nf'
+include { CONSUME_B } from './modules/consume_b/main.nf'
 
 // Minimal reproducer for: a record `Path` field is not reliably staged into a
 // downstream task on a Fusion (S3) executor. The field is sometimes interpolated as
 // a raw object-store path (/bucket/key) instead of staged / Fusion-mapped
 // (/fusion/s3/bucket/key), so the task fails with "no such file or directory".
 //
-// Mirrors the real failing pipeline structure:
+// Mirrors the real failing pipeline:
 //   - a 2-Path-field record (like ReadPair {r1,r2})
-//   - the record is consumed by TWO processes (like READ_STRUCTURE + BARCODE_CHECK)
-//   - one consumer mixes the record with a separate Path input (like a whitelist)
-// getClass() (evaluated at script-render time) reports TaskPath (staged) vs a raw
-// S3Path. Parameterized ids so a resume can ADD samples (the scenario that failed).
-
-record Pair {
-    id: String
-    r1: Path
-    r2: Path
-}
+//   - record consumed by TWO processes (like READ_STRUCTURE + BARCODE_CHECK)
+//   - one consumer is a MODULE-BINARY process mixing the record + a separate Path
+//     input (like BARCODE_CHECK + whitelist) -- this is where the raw path appeared
+// getClass() (script-render time) reports TaskPath (staged) vs raw S3Path.
+// Parameterized ids so a resume can ADD samples (the scenario that failed).
 
 process MAKE {
     tag "${id}"
@@ -32,7 +31,7 @@ process MAKE {
     """
 }
 
-// Consumer A: record only (like READ_STRUCTURE).
+// Consumer A: plain process, record only (like READ_STRUCTURE).
 process CONSUME_A {
     tag "${rec.id}"
     container 'ubuntu:24.04'
@@ -42,24 +41,8 @@ process CONSUME_A {
     out: Path = file("${rec.id}.a.out")
     script:
     """
-    echo "CONSUME_A ${rec.id}: r1class=${rec.r1.getClass()} r1=${rec.r1} r2class=${rec.r2.getClass()} r2=${rec.r2}"
+    echo "CONSUME_A ${rec.id}: r1class=${rec.r1.getClass()} r1=${rec.r1}"
     cat ${rec.r1} ${rec.r2} > ${rec.id}.a.out
-    """
-}
-
-// Consumer B: record + a separate Path input (like BARCODE_CHECK + whitelist).
-process CONSUME_B {
-    tag "${rec.id}"
-    container 'ubuntu:24.04'
-    input:
-    rec: Pair
-    asset: Path
-    output:
-    out: Path = file("${rec.id}.b.out")
-    script:
-    """
-    echo "CONSUME_B ${rec.id}: r1class=${rec.r1.getClass()} r1=${rec.r1} assetclass=${asset.getClass()} asset=${asset}"
-    cat ${rec.r1} ${rec.r2} ${asset} > ${rec.id}.b.out
     """
 }
 
