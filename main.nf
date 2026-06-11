@@ -2,7 +2,6 @@ nextflow.enable.types = true
 nextflow.enable.moduleBinaries = true
 
 include { Pair } from './types.nf'
-include { CONSUME_B } from './modules/consume_b/main.nf'
 
 // Minimal reproducer for: a record `Path` field is not reliably staged into a
 // downstream task on a Fusion (S3) executor. The field is sometimes interpolated as
@@ -69,9 +68,7 @@ params {
 workflow {
     main:
     made  = MAKE(channel.fromList(params.ids))
-    asset = file("${projectDir}/assets/asset.txt")
 
     CONSUME_A(made)
-    CONSUME_B(made, asset)
     VIA_PATH(made.map { r -> r.r1 }, made.map { r -> r.r2 })
 }
