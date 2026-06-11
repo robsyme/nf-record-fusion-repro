@@ -71,13 +71,15 @@ process VIA_PATH {
     """
 }
 
+params {
+    // Sample ids. Parameterized so a resume can ADD new ids: old ones cache, new
+    // ones run fresh -- the scenario under which the staging miss was observed.
+    ids: List<String> = ['s01','s02','s03','s04','s05']
+}
+
 workflow {
     main:
-    ids  = channel.of(
-        's01','s02','s03','s04','s05','s06','s07','s08','s09','s10',
-        's11','s12','s13','s14','s15','s16','s17','s18','s19','s20'
-    )
-    made = MAKE(ids)
+    made = MAKE(channel.fromList(params.ids))
 
     VIA_RECORD(made)
     VIA_PATH(made.map { r -> r.r1 }, made.map { r -> r.r2 })
