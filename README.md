@@ -1,68 +1,56 @@
 # nf-record-fusion-repro
 
-Minimal reproducer for a Nextflow bug: a **record `Path` field is not reliably
-staged into a downstream task on a Fusion (S3) executor**.
-
-## Confirmed trigger (deterministic)
-
-The bug is triggered by **`nextflow.enable.moduleBinaries = true`** on a Fusion (S3)
-executor. With the flag enabled, a **record-field `Path` input is not staged**: it
-stays a raw `S3Path` and is interpolated into `.command.sh` without the `/fusion/s3`
-mount prefix, so the task fails with "No such file". A **direct `Path` input** is
-staged normally (`TaskPath`) and works. Observed in a single fresh run via the
-`getClass()` probe:
+Minimal, deterministic reproducer for a Nextflow bug: with
+**`nextflow.enable.moduleBinaries = true`** on a **Fusion (S3)** executor, a typed
+process consuming a **record field of type `Path`** does **not** stage that input.
+The field stays a raw `S3Path` and is interpolated into `.command.sh` without the
+`/fusion/s3` mount prefix, so the task fails:
 
 ```
-CONSUME_A s01: r1class=class nextflow.cloud.aws.nio.S3Path  r1=/bucket/.../s01_1.txt   <- record field, UNSTAGED -> fails
-VIA_PATH  s01: r1class=class nextflow.processor.TaskPath     r1=s01_1.txt               <- direct Path, staged -> works
+cat: /my-bucket/.../s02_1.txt: No such file or directory
 ```
 
-Remove `nextflow.enable.moduleBinaries = true` and every consumer passes. (Nextflow
-26.04.x.)
+A **direct `Path` input** for the same file stages normally and works. Removing the
+`nextflow.enable.moduleBinaries` flag makes every consumer pass.
 
-## Symptom
-
-A typed process consumes a `Path` carried in a record field (`${rec.f}`). On a
-Fusion-backed object-store executor, the field is intermittently interpolated into
-`.command.sh` as a **raw object-store path** (`/bucket/key`) instead of being staged
-and Fusion-mapped (`/fusion/s3/bucket/key`). The task then fails:
+## Evidence (getClass at script-render time)
 
 ```
-cat: /my-bucket/.../s07.txt: No such file or directory
+CONSUME_A s02: r1class=class nextflow.cloud.aws.nio.S3Path  r1=/bucket/.../s02_1.txt  <- record field: UNSTAGED -> fails
+VIA_PATH  s02: r1class=class nextflow.processor.TaskPath     r1=s02_1.txt              <- direct Path: staged -> works
 ```
-
-Passing the **same file as a direct `Path` input** (not via a record field) always
-works — so this isolates the defect to record-field file staging.
 
 ## Pipeline
 
-- `MAKE` (×10) writes a file and emits `record(id, f: file(...))`.
-- `VIA_RECORD` reads the file through the record field `rec.f`.
-- `VIA_PATH` reads the **same** file through a direct `Path` input (control).
+- `MAKE` writes two files and emits `record(id, r1: Path, r2: Path)`.
+- `CONSUME_A` reads the files via the **record fields** `rec.r1` / `rec.r2`.
+- `VIA_PATH` reads the **same** files via **direct `Path`** inputs (control).
 
-Fanned out over 10 samples to surface the intermittency. If buggy, some
-`VIA_RECORD` tasks fail with "no such file" while **all** `VIA_PATH` tasks succeed.
+## Trigger / scope
 
-## Mechanism (located in nextflow 26.04.x)
+- Trigger: `nextflow.enable.moduleBinaries = true` (the flag alone; no module-binary
+  process need be present or used).
+- Only **record-field `Path`** inputs are affected; **direct `Path`** inputs are fine.
+- Requires a remote/Fusion path provider — it does **not** reproduce on a local
+  filesystem (local record fields stage as `TaskPath`).
+- Observed on Nextflow 26.04.x.
+
+## Mechanism (located)
 
 - `TaskInputResolver.normalizePath` replaces a `Path` with a staged `TaskPath` only
-  if `holders.containsKey(value)`, else returns the raw `Path`.
-- For a record field, the match into `holders` (built from the auto-generated
-  `stageAs` file inputs in `ProcessDslV2`) intermittently misses, so the raw S3
-  `Path` survives.
-- A raw S3 `Path.toString()` is `/bucket/key`; it never passes through
+  if `holders.containsKey(value)`, else returns the raw `Path`. With the flag on,
+  the record field is not present in `holders`, so the raw `S3Path` survives.
+- A raw `S3Path.toString()` is `/bucket/key`; it never passes through
   `FusionHelper.toContainerMount` (`/fusion/$scheme/$bucket$path`), so it is not
   mounted in the task container.
 
 ## Run
-
-Requires Nextflow ≥ 26.04, the v2 parser, and a Fusion-enabled executor (e.g. AWS
-Batch + Fusion + Wave):
 
 ```bash
 export NXF_SYNTAX_PARSER=v2
 nextflow run robsyme/nf-record-fusion-repro -profile <fusion-batch-profile>
 ```
 
-To inspect a failed `VIA_RECORD` task, look at its `.command.sh`: the `cat`
-argument will be a bare `/bucket/...` path with no `/fusion/s3` prefix.
+`CONSUME_A` tasks fail ("No such file"); `VIA_PATH` tasks succeed. Inspect a failed
+`CONSUME_A` task's `.command.sh`: the `cat` argument is a bare `/bucket/...` path
+with no `/fusion/s3` prefix.

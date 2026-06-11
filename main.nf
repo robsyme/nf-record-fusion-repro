@@ -68,7 +68,6 @@ params {
 workflow {
     main:
     made  = MAKE(channel.fromList(params.ids))
-    asset = file("${projectDir}/assets/asset.txt")
 
     CONSUME_A(made)
     VIA_PATH(made.map { r -> r.r1 }, made.map { r -> r.r2 })
