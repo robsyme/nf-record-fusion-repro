@@ -5,14 +5,16 @@ nextflow.enable.types = true
 // as a raw object-store path (/bucket/key) instead of being staged / Fusion-mapped
 // (/fusion/s3/bucket/key), so the task fails with "no such file or directory".
 //
-// A/B: VIA_RECORD consumes the file through a record field (rec.f); VIA_PATH
-// consumes the SAME file through a direct Path input. Fanned out over many samples
-// to surface the intermittency. Expectation if buggy: some VIA_RECORD tasks fail
-// while all VIA_PATH tasks succeed.
+// Mirrors the real failing case: a 2-Path-field record (like ReadPair {r1,r2}).
+// A/B: VIA_RECORD consumes via record fields (rec.r1/rec.r2); VIA_PATH consumes the
+// SAME files via direct Path inputs. getClass() is evaluated at script-render time,
+// so it reveals whether each path was staged (TaskPath) or left raw (S3Path).
+// Fanned out over many samples to surface the intermittency.
 
-record Sample {
+record Pair {
     id: String
-    f: Path
+    r1: Path
+    r2: Path
 }
 
 process MAKE {
@@ -23,57 +25,60 @@ process MAKE {
     id: String
 
     output:
-    rec: Sample = record(id: id, f: file("${id}.txt"))
+    rec: Pair = record(id: id, r1: file("${id}_1.txt"), r2: file("${id}_2.txt"))
 
     script:
     """
-    echo "payload for ${id}" > ${id}.txt
+    echo "${id} mate 1" > ${id}_1.txt
+    echo "${id} mate 2" > ${id}_2.txt
     """
 }
 
-// Consume the file via the RECORD FIELD (rec.f).
+// Consume both files via RECORD FIELDS (rec.r1 / rec.r2).
 process VIA_RECORD {
     tag "${rec.id}"
     container 'ubuntu:24.04'
 
     input:
-    rec: Sample
+    rec: Pair
 
     output:
     out: Path = file("${rec.id}.via_record.out")
 
     script:
-    // getClass() is evaluated at script-render time (head job), so it reports
-    // whether the record field was staged (TaskPath) or left raw (S3Path/UnixPath).
     """
-    echo "VIA_RECORD ${rec.id}: class=${rec.f.getClass()} path=${rec.f}"
-    cat ${rec.f} > ${rec.id}.via_record.out
+    echo "VIA_RECORD ${rec.id}: r1class=${rec.r1.getClass()} r1=${rec.r1} r2class=${rec.r2.getClass()} r2=${rec.r2}"
+    cat ${rec.r1} ${rec.r2} > ${rec.id}.via_record.out
     """
 }
 
-// Consume the SAME file via a DIRECT Path input (control).
+// Consume the SAME files via DIRECT Path inputs (control).
 process VIA_PATH {
-    tag "${f.baseName}"
+    tag "${r1.baseName}"
     container 'ubuntu:24.04'
 
     input:
-    f: Path
+    r1: Path
+    r2: Path
 
     output:
-    out: Path = file("${f.baseName}.via_path.out")
+    out: Path = file("${r1.baseName}.via_path.out")
 
     script:
     """
-    echo "VIA_PATH ${f.baseName}: class=${f.getClass()} path=${f}"
-    cat ${f} > ${f.baseName}.via_path.out
+    echo "VIA_PATH ${r1.baseName}: r1class=${r1.getClass()} r1=${r1} r2class=${r2.getClass()} r2=${r2}"
+    cat ${r1} ${r2} > ${r1.baseName}.via_path.out
     """
 }
 
 workflow {
     main:
-    ids  = channel.of('s01','s02','s03','s04','s05','s06','s07','s08','s09','s10')
+    ids  = channel.of(
+        's01','s02','s03','s04','s05','s06','s07','s08','s09','s10',
+        's11','s12','s13','s14','s15','s16','s17','s18','s19','s20'
+    )
     made = MAKE(ids)
 
     VIA_RECORD(made)
-    VIA_PATH(made.map { r -> r.f })
+    VIA_PATH(made.map { r -> r.r1 }, made.map { r -> r.r2 })
 }
