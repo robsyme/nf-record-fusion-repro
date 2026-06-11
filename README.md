@@ -3,6 +3,23 @@
 Minimal reproducer for a Nextflow bug: a **record `Path` field is not reliably
 staged into a downstream task on a Fusion (S3) executor**.
 
+## Confirmed trigger (deterministic)
+
+The bug is triggered by **`nextflow.enable.moduleBinaries = true`** on a Fusion (S3)
+executor. With the flag enabled, a **record-field `Path` input is not staged**: it
+stays a raw `S3Path` and is interpolated into `.command.sh` without the `/fusion/s3`
+mount prefix, so the task fails with "No such file". A **direct `Path` input** is
+staged normally (`TaskPath`) and works. Observed in a single fresh run via the
+`getClass()` probe:
+
+```
+CONSUME_A s01: r1class=class nextflow.cloud.aws.nio.S3Path  r1=/bucket/.../s01_1.txt   <- record field, UNSTAGED -> fails
+VIA_PATH  s01: r1class=class nextflow.processor.TaskPath     r1=s01_1.txt               <- direct Path, staged -> works
+```
+
+Remove `nextflow.enable.moduleBinaries = true` and every consumer passes. (Nextflow
+26.04.x.)
+
 ## Symptom
 
 A typed process consumes a `Path` carried in a record field (`${rec.f}`). On a
