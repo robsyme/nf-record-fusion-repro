@@ -43,7 +43,10 @@ process VIA_RECORD {
     out: Path = file("${rec.id}.via_record.out")
 
     script:
+    // getClass() is evaluated at script-render time (head job), so it reports
+    // whether the record field was staged (TaskPath) or left raw (S3Path/UnixPath).
     """
+    echo "VIA_RECORD ${rec.id}: class=${rec.f.getClass()} path=${rec.f}"
     cat ${rec.f} > ${rec.id}.via_record.out
     """
 }
@@ -61,6 +64,7 @@ process VIA_PATH {
 
     script:
     """
+    echo "VIA_PATH ${f.baseName}: class=${f.getClass()} path=${f}"
     cat ${f} > ${f.baseName}.via_path.out
     """
 }
